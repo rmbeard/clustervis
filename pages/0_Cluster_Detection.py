@@ -17,6 +17,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from splot.esda import moran_scatterplot
 import plotly.graph_objs as go
+#from Bio.Phylo.TreeConstruction import DistanceCalculator
+
 
 
 # Define a function to reset the session states to their default values
@@ -34,7 +36,7 @@ def load_shapefile():
     return gdf
 
 def load_data():
-    data_path = os.path.join('data', 'ny_covid_data.csv')  # Adjust this path as needed
+    data_path = os.path.join('data', 'ny_covid_data_aligned.csv')  # Adjust this path as needed
 
     # Load file into a GeoDataFrame
     df = pd.read_csv(data_path)
@@ -545,6 +547,24 @@ def calculate_cluster_frequencies(gdf, df, column_selected, weight_method):
     return cluster_freq
 
 
+def plot_cluster_analysis(gdf, stat):
+     # Ensure the 'Date' column is of datetime type
+    df['Date'] = pd.to_datetime(df['Date'])
+
+    # Get unique dates from the df
+    unique_dates = df['Date'].dt.date.unique()
+
+
+    for date in unique_dates:
+        # Filter based on the selected date
+        filtered_df = df[df['Date'].dt.date == date]
+        # Merge filtered data with spatial data
+        merged_gdf = gdf.merge(filtered_df[[column_selected, 'County_id']], left_on='NAME', right_on='County_id', how='left')
+        
+        # Call cluster_analysis function
+        cluster_gdf = cluster_analysis(merged_gdf, weight_method, column_selected)
+
+
 def create_frequency_table(cluster_freq_df):
     """
     Creates a formatted table of cluster frequencies.
@@ -585,7 +605,7 @@ def on_selection_change():
         if isinstance(selected_date, str):
             # Parse the date string to a datetime.date object
             selected_date = datetime.strptime(selected_date, '%m/%d/%Y').date()
-        
+        print(selected_date)
         filtered_df = df[df['Date'].dt.date == selected_date]  # Filter based on the selected date
         print("filtered data", filtered_df)
         merged_gdf= gdf.merge(filtered_df[[column_selected, 'County_id', 'Date']], left_on='NAME', right_on='County_id', how='left')
@@ -596,7 +616,7 @@ def on_selection_change():
         new_gdf=cluster_analysis(merged_gdf, weight_method, column_selected)
         st.session_state.merged_gdf=new_gdf
         map=display_hotspot_map(new_gdf)
-        scatter = plot_morans_scatter(merged_gdf, st.session_state.column_selected, st.session_state.weight_method)
+       # scatter = plot_morans_scatter(st.session_state.merged_gdf, st.session_state.column_selected, st.session_state.weight_method)
         # Assuming 'gdf' is your GeoDataFrame, 'date_column' is the name of your date column, and 'value_column' is the column you're analyzing
         # Example usage:
         #clust_freq_gdf=calculate_cluster_frequencies(gdf,df,st.session_state.slected_column, st.session_state.weight_method)
@@ -606,8 +626,8 @@ def on_selection_change():
         st.session_state.scatter=scatter
         st.session_state.map=map
         st.session_state.merged_gdf=merged_gdf
-        st.session_state.clust_freq_gdf=clust_freq_gdf
-        st.session_state.cluster_plot=cluster_plot
+        #st.session_state.clust_freq_gdf=clust_freq_gdf
+        #st.session_state.cluster_plot=cluster_plot
 
 def selection() -> None:
     # Interactive radio buttons
@@ -636,7 +656,7 @@ def selection() -> None:
         
     # Add a dropdown for the weighting method
     st.sidebar.selectbox("Select Weighting Method", 
-        ("Queens Contiguity", "IDW", "Distance Band"),
+        ("Queens Contiguity", "Distance Band", 'Genetic_distance'),
          key='weight_method',
         on_change=on_selection_change, # Call this function when value changes)
         #args=(column_selected,selected_date,weight_method)
@@ -666,31 +686,64 @@ def selection() -> None:
 
         aggregated_data= aggregate_data(df,freq)
         df=aggregated_data
-        #st.session_state.df=df
+        st.session_state.df=df
     
-    print("aggregated data",df)
+    print("aggregated data", st.session_state.df)
     
     #Create Slider to select date
     df['Date'] = pd.to_datetime(df['Date'])  # Convert the 'Date' column to datetime if it's not already
     # Convert Pandas Timestamp to datetime.date for the slider
     min_date = df['Date'].min().date()  # Convert to datetime.date
     max_date = df['Date'].max().date()  # Convert to datetime.date
-    # Explanation text for Moran's I outputs
+    # Assume df is your DataFrame with weekly aggregated data
+    # Extract the unique aggregated dates
+    unique_dates = df['Date'].sort_values().unique()
 
-    st.markdown(explanation_text)
+    # Convert numpy datetime64 to a list of datetime.date for the slider
+    unique_dates_list = [pd.to_datetime(date).date() for date in unique_dates]
+
+
    # Create the slider to select the date
-    st.slider(
+    st.select_slider(
         "Select a date to perform cluster detection:",
-        min_value=min_date,
-        max_value=max_date,
-        value=min_date,
-        format="MM/DD/YYYY",
+        options=unique_dates_list,
+        format_func=lambda x: pd.to_datetime(x).strftime('%m/%d/%Y'),  # Format display of dates
         key='selected_date',
         on_change=on_selection_change  # Call the on_date_change function when the value changes
     )
 
+def hamming_distance(seq1, seq2):
+    """Calculate the Hamming distance between two sequences"""
+    # Ensure sequences are the same length
+    if len(seq1) != len(seq2):
+        raise ValueError("Sequences are of different lengths.")
+    
+    # Count the differences
+    return sum(ch1 != ch2 for ch1, ch2 in zip(seq1, seq2))
 
-   
+def shannons_entropy(alignment):
+    """Calculate Shannon's entropy for each column of a multiple sequence alignment"""
+    # alignment is a list of sequences (assumed to be all the same length)
+    entropy_list = []
+    for col in range(len(alignment[0])):
+        column = [seq[col] for seq in alignment]
+        frequencies = {base: column.count(base) / len(column) for base in set(column)}
+        entropy = -sum(freq * np.log2(freq) for freq in frequencies.values())
+        entropy_list.append(entropy)
+    return np.mean(entropy_list)
+
+def tamura_nei_distance(alignment):
+    """Calculate Tamura-Nei distance between sequences in a multiple sequence alignment"""
+    calculator = DistanceCalculator('tamura')
+    distance_matrix = calculator.get_distance(alignment)
+    return distance_matrix
+
+def create_time_cube (merged_gdf):
+    #aggregate data into bins
+    merged_gdf['time_bin'] = pd.cut(merged_gdf['date'], bins=pd.date_range(start=merged_gdf['date'].min(), end=mergedgdf['date'].max(), freq='W'))
+    #
+    space_time_aggregated = merged_gdf.groupby(['geometry', 'time_bin']).size()
+
 st.set_page_config(page_title="Cluster Detection", page_icon="📹")
 st.markdown("# Cluster Detection")
 st.sidebar.header("Select inputs")
@@ -733,6 +786,8 @@ column_selected = st.session_state.column_selected
 
 if 'df' not in st.session_state:
     st.session_state['df'] = load_data()
+    aggregated_data= aggregate_data(st.session_state['df'] ,'W')
+    st.session_state['df']= aggregated_data
 
 df= st.session_state.df
 df['Date'] = pd.to_datetime(df['Date'])  # Convert the 'Date' column to datetime if it's not already
@@ -762,14 +817,6 @@ if 'scatter' not in st.session_state:
     st.session_state['scatter']=plot_morans_scatter(merged_gdf, column_selected, weight_method)
     #st.session_state['scatter']=cluster_analysis_and_plot(merged_gdf, column_selected, weight_method)
 
-#if ' clust_freq_gdf' not in st.session_state:
-#    st.session_state[' clust_freq_gdf']=calculate_cluster_frequencies(gdf,df, st.session_state.column_selected, st.session_state.weight_method)
-#clust_freq_gdf=st.session_state[' clust_freq_gdf']
-
-if 'cluster_plot' not in st.session_state:
-    st.session_state['cluster_plot']= plot_cluster_frequencies(clust_freq_gdf)
-
-
 # Button to re-run the script
 if st.sidebar.button("Reset"):
     st.session_state.df=df
@@ -788,10 +835,12 @@ if st.sidebar.button("Reset"):
 # gdf should be your joined GeoDataFrame with Moran's I results
 selection()
 
+
+
 #map=display_map(st.session_state.merged_gdf)
 map = st.session_state.map
 scatter=st.session_state.scatter
-cluster_plot= st.session_state.cluster_plot
+
 print('Current merged_gdf', st.session_state.merged_gdf.head(30))
 folium_static(map)
 st.write('Legend:')
@@ -825,10 +874,28 @@ legend_html = f"""
 st.markdown(legend_html, unsafe_allow_html=True)
 
 #st.plotly_chart(scatter)
-st.pyplot(scatter)
-st.sidebar.write('Choose comparative analysis')
-#st.pyplot(cluster_plot)
+#st.pyplot(scatter)
 
+stat=st.sidebar.selectbox("Choose comparative analysis",
+        ("Moran's I on the Residuals", "Rho", "Moran's I"),
+         key='parameter',
+        on_change=plot_cluster_analysis, # Call this function when value changes)
+        #args=(column_selected,selected_date,weight_method)
+    )                          
+
+if st.sidebar.button('Perform comparative analysis'):
+    plot_cluster_analysis
+
+
+#if ' clust_freq_gdf' not in st.session_state:
+#    st.session_state[' clust_freq_gdf']=calculate_cluster_frequencies(gdf,df, st.session_state.column_selected, st.session_state.weight_method)
+#clust_freq_gdf=st.session_state[' clust_freq_gdf']
+
+#if 'cluster_plot' not in st.session_state:
+#    st.session_state['cluster_plot']= plot_cluster_frequencies(clust_freq_gdf)
+
+#cluster_plot= st.session_state.cluster_plot
+#st.pyplot(cluster_plot)
 print('done')
 #st.pydeck_chart(map)
 
