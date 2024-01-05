@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from splot.esda import moran_scatterplot
 import plotly.graph_objs as go
+from datetime import timedelta
 #from Bio.Phylo.TreeConstruction import DistanceCalculator
 
 
@@ -47,6 +48,12 @@ def merge_data(gdf, df,date):
     filtered_df = df[df['Date'].dt.date == date]  # Filter based on the selected date
     merged_gdf= gdf.merge(filtered_df[[st.session_state.column_selected, 'County_id', 'Date']], left_on='NAME', right_on='County_id', how='left')
     return merged_gdf
+
+def merge_data_cube(gdf, df):
+    #df['Date'] = pd.to_datetime(df['Date'])  # Convert the 'Date' column to datetime if it's not already
+    #filtered_df = df[df['Date'].dt.date == date]  # Filter based on the selected date
+    cube_gdf= gdf.merge(df[[st.session_state.column_selected, 'County_id', 'Date']], left_on='NAME', right_on='County_id', how='left')
+    return cube_gdf
 
 def display_map(gdf):
     # If your shapefile's geometry is polygons, convert it to centroids for point representation
@@ -381,7 +388,6 @@ def plot_morans_scatter(gdf, column_selected, weight_method):
         # Handle the case where the weight method is not implemented
         return None  
 
-
 def plot_morans_scatter_new(gdf, column_selected, weight_method):
     y = gdf[column_selected].values
     w = None
@@ -467,7 +473,6 @@ def plot_morans_scatter_new(gdf, column_selected, weight_method):
     else:
         return None
 
-
 def plot_morans_i(columns_to_show, date_column='Date'):
        # Start the plot
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -486,7 +491,6 @@ def plot_morans_i(columns_to_show, date_column='Date'):
 
 
     return fig
-
 
 def calculate_cluster_frequencies(gdf, df, column_selected, weight_method):
     """
@@ -546,7 +550,6 @@ def calculate_cluster_frequencies(gdf, df, column_selected, weight_method):
     #print('cluster_freq', cluster_freq)
     return cluster_freq
 
-
 def plot_cluster_analysis(gdf, stat):
      # Ensure the 'Date' column is of datetime type
     df['Date'] = pd.to_datetime(df['Date'])
@@ -564,7 +567,6 @@ def plot_cluster_analysis(gdf, stat):
         # Call cluster_analysis function
         cluster_gdf = cluster_analysis(merged_gdf, weight_method, column_selected)
 
-
 def create_frequency_table(cluster_freq_df):
     """
     Creates a formatted table of cluster frequencies.
@@ -578,7 +580,6 @@ def create_frequency_table(cluster_freq_df):
     formatted_table = cluster_freq_df.copy()
     formatted_table['Total'] = formatted_table.sum(axis=1)
     return formatted_table
-
 
 def plot_cluster_frequencies(cluster_freq_df):
     """
@@ -594,7 +595,6 @@ def plot_cluster_frequencies(cluster_freq_df):
     plt.close()
     return fig
     
-
 def on_selection_change():
         print('current df', df)
         selected_date = st.session_state['selected_date']
@@ -738,22 +738,23 @@ def tamura_nei_distance(alignment):
     distance_matrix = calculator.get_distance(alignment)
     return distance_matrix
 
-def create_time_cube(merged_gdf, column_selected):
+def create_time_cube(cube_gdf, column_selected):
     # Convert date column to pandas datetime
-    n_gdf=merged_gdf
-    n_gdf['Date'] = pd.to_datetime(n_gdf['Date'])
-
     # Create time bins
-    n_gdf['time_bin'] = n_gdf['Date'].dt.to_period('W')
+    cube_gdf['time_bin'] = cube_gdf['Date'].dt.to_period('W')
 
-    # Group data by spatial unit and time bin, then calculate sum or mean as required
-    space_time_aggregated = n_gdf.groupby(['County_id', 'time_bin'])[column_selected].sum().reset_index()
+    # Group data by spatial unit, time bin, and perform aggregation
+    space_time_gdf = cube_gdf.groupby(['geometry','Date', 'County_id', 'time_bin']).agg({column_selected: 'sum'})
 
-    return space_time_aggregated
+    # Reset index to turn grouped fields back into columns
+    space_time_gdf.reset_index(inplace=True)
+
+    # Creating a 3D array-like structure with geometries, time bins, and aggregated values
+    return space_time_gdf
 
 def cluster_analysis_space_time(cube, weight_method, column_selected):
     # Ensure there are no NaN values in the column of interest
-    cube.dropna(subset=[column_selected])
+    #cube.dropna(subset=[column_selected])
         # Determine the weights matrix based on the specified method
     if weight_method == 'Queens Contiguity':
         w = weights.Queen.from_dataframe(merged_gdf)
@@ -787,6 +788,62 @@ def cluster_analysis_space_time(cube, weight_method, column_selected):
     
     # Return the cube with Moran's I results
     return cube_with_moran
+
+def perform_local_morans_i(cube_gdf, spatial_weight_type, column_selected, temporal_lag_steps):
+    # Convert time_bin to datetime for temporal analysis
+    specific_time_bin = cube_gdf['time_bin'].min()
+    #cube_gdf['Date'] = pd.to_datetime(cube_gdf['time_bin'].apply(lambda x: x.split('/')[0]))
+    cube_gdf['Date'] = pd.to_datetime(cube_gdf['time_bin'].astype(str).apply(lambda x: x.split('/')[0]))
+    # Filter to include only the specific time bin
+    subset_gdf = cube_gdf[cube_gdf['time_bin'] == specific_time_bin]
+
+    # Create spatial weights using the subset
+    w = weights.Queen.from_dataframe(subset_gdf, use_index=True)
+    # Create Spatial Weights
+    if spatial_weight_type == 'Queens Contiguity':
+        w = weights.Queen.from_dataframe(cube_gdf)
+    elif spatial_weight_type == 'Distance Band':
+        distance_threshold = 1  # Define your threshold
+        w = weights.DistanceBand.from_dataframe(cube_gdf, threshold=distance_threshold)
+
+    # Moran's I calculation
+    results = []
+    cube_gdf = cube_gdf.sort_values('Date')
+    all_dates = cube_gdf['Date'].unique()
+
+    for index, row in cube_gdf.iterrows():
+        # Determine available temporal neighbors within the specified lag
+        current_index = list(all_dates).index(row['Date'])
+        lower_bound = max(0, current_index - temporal_lag_steps)
+        upper_bound = min(len(all_dates), current_index + temporal_lag_steps + 1)
+        available_dates = all_dates[lower_bound:upper_bound]
+
+        temporal_neighbors = cube_gdf[cube_gdf['Date'].isin(available_dates)]
+
+        # Calculate median value for smoothing
+        median_value = temporal_neighbors[column_selected].median()
+
+        # Local Moran's I with spatial weights and median value
+        moran_local = esda.Moran_Local(median_value, w)
+
+        results.append({
+            'County_id': row['County_id'],
+            'geometry': row['geometry'],
+            'Date': row['Date'],
+            'Local_Moran_I': moran_local.Is[index],
+            'p_value': moran_local.p_sim[index],
+            'Quadrant': moran_local.q,
+            'P_Value': moran_local.p_sim,
+            'Expected_I':moran_local.EI_sim,
+            'Variance_I': moran_local.VI_sim,
+            'StdDev_I': moran_local.seI_sim,
+        '   Z_Score_I': moran_local.z_sim
+        })
+
+    # Convert results to DataFrame
+    space_time_moran= pd.DataFrame(results)
+
+    return space_time_moran
 
 
 st.set_page_config(page_title="Cluster Detection", page_icon="📹")
@@ -851,11 +908,24 @@ if 'merged_gdf' not in st.session_state:
     st.session_state['merged_gdf'] =merge_data(gdf,df,selected_date)
  
 merged_gdf = merge_data(gdf,df,selected_date)
-print('first declartion merged_gdf', st.session_state.merged_gdf.head(30))
+print('first declartion merged_gdf', st.session_state.merged_gdf.head)
+
+if 'cube_gdf' not in st.session_state:
+    st.session_state['cube_gdf'] =merge_data_cube(gdf,df)
+cube_gdf = merge_data_cube(gdf,df)
+
+if 'temporal_lag_steps' not in st.session_state:
+    st.session_state['temporal_lag_steps'] =1
+temporal_lag_steps=1
 if 'cube' not in st.session_state:
-    st.session_state['cube']=create_time_cube(merged_gdf= st.session_state.merged_gdf, column_selected= st.session_state.column_selected)
-cube=create_time_cube(merged_gdf,  column_selected= st.session_state.column_selected)
-print('after cube declared', st.session_state.merged_gdf.head(30))
+    st.session_state['cube']=create_time_cube(cube_gdf= st.session_state.cube_gdf, column_selected= st.session_state.column_selected)
+cube=create_time_cube(cube_gdf,  column_selected)
+print('after cube declared', st.session_state.merged_gdf)
+
+if 'moran_space_cube' not in st.session_state:
+    st.session_state['moran_space_cube']=perform_local_morans_i(cube_gdf, weight_method, column_selected, temporal_lag_steps)
+
+moran_space_cube=perform_local_morans_i(cube_gdf, weight_method, column_selected, temporal_lag_steps)
 
 if 'placeholder_map' not in st.session_state:
     st.session_state['placeholder_map']=cluster_analysis(st.session_state.merged_gdf, st.session_state.weight_method, st.session_state.column_selected)
