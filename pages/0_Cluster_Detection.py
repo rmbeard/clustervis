@@ -738,11 +738,56 @@ def tamura_nei_distance(alignment):
     distance_matrix = calculator.get_distance(alignment)
     return distance_matrix
 
-def create_time_cube (merged_gdf):
-    #aggregate data into bins
-    merged_gdf['time_bin'] = pd.cut(merged_gdf['date'], bins=pd.date_range(start=merged_gdf['date'].min(), end=mergedgdf['date'].max(), freq='W'))
-    #
-    space_time_aggregated = merged_gdf.groupby(['geometry', 'time_bin']).size()
+def create_time_cube(merged_gdf, column_selected):
+    # Convert date column to pandas datetime
+    n_gdf=merged_gdf
+    n_gdf['Date'] = pd.to_datetime(n_gdf['Date'])
+
+    # Create time bins
+    n_gdf['time_bin'] = n_gdf['Date'].dt.to_period('W')
+
+    # Group data by spatial unit and time bin, then calculate sum or mean as required
+    space_time_aggregated = n_gdf.groupby(['County_id', 'time_bin'])[column_selected].sum().reset_index()
+
+    return space_time_aggregated
+
+def cluster_analysis_space_time(cube, weight_method, column_selected):
+    # Ensure there are no NaN values in the column of interest
+    cube.dropna(subset=[column_selected])
+        # Determine the weights matrix based on the specified method
+    if weight_method == 'Queens Contiguity':
+        w = weights.Queen.from_dataframe(merged_gdf)
+    elif weight_method == 'IDW':
+        # This is a placeholder - PySAL does not provide IDW weights for clustering
+        # You would need to create or find a function to calculate these weights
+        w = weights.distance.DistanceBand.from_dataframe(merged_gdf, threshold=1, binary=True)
+    elif weight_method == 'Distance Band':
+        w = weights.DistanceBand.from_dataframe(merged_gdf, threshold=1, binary=True)
+    
+    # Normalize the weights matrix
+    #print(w)
+    w.transform = 'r'
+   
+    # Perform Moran's I analysis for spatial autocorrelation
+    moran_i_results = esda.Moran_Local(cube[column_selected], w)
+    
+    # Create a DataFrame to store the results
+    moran_i_df = pd.DataFrame({
+        'Local_Moran_I': moran_i_results.Is,
+        'Quadrant': moran_i_results.q,
+        'P_Value': moran_i_results.p_sim,
+        'Expected_I': moran_i_results.EI_sim,
+        'Variance_I': moran_i_results.VI_sim,
+        'StdDev_I': moran_i_results.seI_sim,
+        'Z_Score_I': moran_i_results.z_sim
+    }, index=cube.index)
+    
+    # Join the Moran's I results back to the space-time cube
+    cube_with_moran = cube.join(moran_i_df)
+    
+    # Return the cube with Moran's I results
+    return cube_with_moran
+
 
 st.set_page_config(page_title="Cluster Detection", page_icon="📹")
 st.markdown("# Cluster Detection")
@@ -806,6 +851,11 @@ if 'merged_gdf' not in st.session_state:
     st.session_state['merged_gdf'] =merge_data(gdf,df,selected_date)
  
 merged_gdf = merge_data(gdf,df,selected_date)
+print('first declartion merged_gdf', st.session_state.merged_gdf.head(30))
+if 'cube' not in st.session_state:
+    st.session_state['cube']=create_time_cube(merged_gdf= st.session_state.merged_gdf, column_selected= st.session_state.column_selected)
+cube=create_time_cube(merged_gdf,  column_selected= st.session_state.column_selected)
+print('after cube declared', st.session_state.merged_gdf.head(30))
 
 if 'placeholder_map' not in st.session_state:
     st.session_state['placeholder_map']=cluster_analysis(st.session_state.merged_gdf, st.session_state.weight_method, st.session_state.column_selected)
@@ -896,6 +946,7 @@ if st.sidebar.button('Perform comparative analysis'):
 
 #cluster_plot= st.session_state.cluster_plot
 #st.pyplot(cluster_plot)
+print('cube', cube)
 print('done')
 #st.pydeck_chart(map)
 
