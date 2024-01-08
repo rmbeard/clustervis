@@ -801,7 +801,7 @@ def perform_local_morans_i(cube_gdf, spatial_weight_type, column_selected, tempo
     w = weights.Queen.from_dataframe(subset_gdf, use_index=True)
     # Create Spatial Weights
     if spatial_weight_type == 'Queens Contiguity':
-        w = weights.Queen.from_dataframe(cube_gdf)
+        w = weights.Queen.from_dataframe(subset_gdf)
     elif spatial_weight_type == 'Distance Band':
         distance_threshold = 1  # Define your threshold
         w = weights.DistanceBand.from_dataframe(cube_gdf, threshold=distance_threshold)
