@@ -26,8 +26,8 @@ import geopandas as gpd
 import logging  
 import requests
 import pandas as pd
-from autocensus import Query
-from sodapy import Socrata
+#from autocensus import Query
+#from sodapy import Socrata
 from datetime import datetime
 import shutil
 from zipfile import ZipFile
@@ -164,3 +164,4 @@ if __name__ == "__main__":
     df= fetch_and_normalize_census_data(api_key, state_code, all_years)
     print(df)
    
+

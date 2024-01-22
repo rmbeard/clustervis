@@ -6,20 +6,20 @@ import geopandas as gpd
 import os
 import pandas as pd
 from pysal.lib import weights
-from utils import aggregate_data, download_county_shapefile
+from utils import aggregate_data #download_county_shapefile
 import esda
 from datetime import datetime
 import folium
 from folium import Choropleth, LayerControl, GeoJson
-from branca.colormap import linear
+#from branca.colormap import linear
 from streamlit_folium import folium_static
 import matplotlib.pyplot as plt
 import seaborn as sns
 from splot.esda import moran_scatterplot
-import plotly.graph_objs as go
+#import plotly.graph_objs as go
 from datetime import timedelta
 #from Bio.Phylo.TreeConstruction import DistanceCalculator
-
+from shapely.geometry import shape, base
 
 
 # Define a function to reset the session states to their default values
@@ -228,93 +228,11 @@ def moran_quadrant_color(gdf, p_value_threshold=0.05):
         4: '#ff69b4',  # Pink
         'insignificant': '#ffffff'  # White for insignificant p-values
     }
-    
+   
     if gdf['P_Value'] > p_value_threshold:
         return colors['insignificant']  # Use white if p-value is not significant
     
     return colors.get(gdf['Quadrant'], '#000000')  # Default color is black if no match
-
-def display_hotspot_map_oldest(gdf):
-    # Convert polygon geometries to centroid points
-    gdf['lon'] = gdf['geometry'].centroid.x
-    gdf['lat'] = gdf['geometry'].centroid.y
-
-    print('moran mapping', gdf)
-    print(gdf.info())
-    # Apply color mapping based on quadrant
-    #gdf['color'] = gdf['quadrant'].map(quadrant_colors)
-   # print(gdf['color'])
-    # Assuming gdf is your GeoDataFrame and 'color' is the column with RGBA values
-    #gdf['color'] = gdf[column_selected].apply(lambda x: scale_color(x))  # Replace wit h your scaling function
-    # Assuming `gdf` is your GeoDataFrame and it has a column 'quadrant' with values 1, 2, 3, or 4
-    gdf['color'] = gdf['Quadrant'].apply(moran_quadrant_color)
-    print(gdf['color'].head())
-
-
-    # Prepare GeoJson data for PyDeck
-    geojson_data = gdf.__geo_interface__
-    #print("conversion", gdf.__geo_interface__ )
-    # Set up PyDeck layer
-    layer = pdk.Layer(
-        'GeoJsonLayer',
-        data=geojson_data,
-        #data=data,
-        get_fill_color='color', # Set a static color for all features
-        pickable=True,
-        filled=True,
-        #wireframe=True,
-        #get_line_color=[0, 0, 0, 255],
-        #line_width_min_pixels=1,
-        auto_highlight=True
-    )
-
-    # Set the initial viewport for the map
-    view_state = pdk.ViewState(
-        longitude=gdf['lon'].mean(),
-        latitude=gdf['lat'].mean(),
-        zoom=6,
-        pitch=0
-    )
-
-    # Create and return the PyDeck map
-    r = pdk.Deck(layers=[layer], initial_view_state=view_state)
-    st.session_state.map=r
-    return r
-
-def display_hotspot_map_old(gdf):
-    # Convert polygon geometries to centroid points for plotting points
-    # If you want to plot polygons, you can skip this step
-    gdf['lon'] = gdf['geometry'].centroid.x
-    gdf['lat'] = gdf['geometry'].centroid.y
-
-    # Apply color mapping based on quadrant
-    gdf['color'] = gdf['Quadrant'].apply(moran_quadrant_color)
-    gdf=gdf.drop(columns=['Date'])
-    
-    # Create a folium map object
-    m = folium.Map(location=[gdf['lat'].mean(), gdf['lon'].mean()], zoom_start=6)
-
-    # Add the GeoJson overlay
-    folium.GeoJson(
-        gdf.__geo_interface__,
-        style_function=lambda feature: {
-            'fillColor': feature['properties']['color'],
-            'color': 'black',
-            'weight': 0.5,
-            'fillOpacity': 0.8,
-        },
-       # highlight_function=lambda feature: {
-       #     'weight': 3,
-       #     'color': 'black',
-        #},
-        tooltip=folium.GeoJsonTooltip(
-            fields=['NAME', 'Local_Moran_I', 'Quadrant'],
-            aliases=['County', 'Local Moran I', 'Quadrant'],
-            localize=True
-        ),
-    ).add_to(m)
-    st.session_state.map=m
-    return m
 
 def display_hotspot_map(gdf):
     # Check the unique values in 'Quadrant' to ensure they are what you expect
@@ -692,9 +610,6 @@ def selection() -> None:
     
     #Create Slider to select date
     df['Date'] = pd.to_datetime(df['Date'])  # Convert the 'Date' column to datetime if it's not already
-    # Convert Pandas Timestamp to datetime.date for the slider
-    min_date = df['Date'].min().date()  # Convert to datetime.date
-    max_date = df['Date'].max().date()  # Convert to datetime.date
     # Assume df is your DataFrame with weekly aggregated data
     # Extract the unique aggregated dates
     unique_dates = df['Date'].sort_values().unique()
@@ -790,61 +705,205 @@ def cluster_analysis_space_time(cube, weight_method, column_selected):
     return cube_with_moran
 
 def perform_local_morans_i(cube_gdf, spatial_weight_type, column_selected, temporal_lag_steps):
-    # Convert time_bin to datetime for temporal analysis
-    specific_time_bin = cube_gdf['time_bin'].min()
-    #cube_gdf['Date'] = pd.to_datetime(cube_gdf['time_bin'].apply(lambda x: x.split('/')[0]))
+    # Convert time_bin to datetime
     cube_gdf['Date'] = pd.to_datetime(cube_gdf['time_bin'].astype(str).apply(lambda x: x.split('/')[0]))
-    # Filter to include only the specific time bin
-    subset_gdf = cube_gdf[cube_gdf['time_bin'] == specific_time_bin]
 
-    # Create spatial weights using the subset
-    w = weights.Queen.from_dataframe(subset_gdf, use_index=True)
+    first_date = cube_gdf['Date'].min()  # Get the earliest date in the dataset
+    print('first_date', first_date)
+    cube_gdf['Date'] = pd.to_datetime(cube_gdf['time_bin'].astype(str).apply(lambda x: x.split('/')[0]))
+      # Filter to include only the specific time bin
+    subset_gdf = cube_gdf[cube_gdf['Date'] == first_date]
+    # Ensure 'County_id' is set as the index
+    subset_gdf = subset_gdf.set_index('County_id')
+
+    print('subset_gdf',subset_gdf)
+
+    #print('starting w cal')
     # Create Spatial Weights
     if spatial_weight_type == 'Queens Contiguity':
         w = weights.Queen.from_dataframe(subset_gdf)
     elif spatial_weight_type == 'Distance Band':
         distance_threshold = 1  # Define your threshold
-        w = weights.DistanceBand.from_dataframe(cube_gdf, threshold=distance_threshold)
+        w = weights.DistanceBand.from_dataframe(subset_gdf, threshold=distance_threshold)
 
-    # Moran's I calculation
-    results = []
-    cube_gdf = cube_gdf.sort_values('Date')
+    # Pre-filter for maximum temporal range
     all_dates = cube_gdf['Date'].unique()
+    max_date_range = pd.to_datetime([date for date in all_dates if date <= all_dates[-1] - pd.Timedelta(days=temporal_lag_steps*7)])
 
-    for index, row in cube_gdf.iterrows():
-        # Determine available temporal neighbors within the specified lag
-        current_index = list(all_dates).index(row['Date'])
+    results = []
+
+    #print('starting loop')
+    for date in max_date_range:
+     #   print('date' , date)
+    
+        current_index = list(all_dates).index(date)
         lower_bound = max(0, current_index - temporal_lag_steps)
         upper_bound = min(len(all_dates), current_index + temporal_lag_steps + 1)
         available_dates = all_dates[lower_bound:upper_bound]
 
         temporal_neighbors = cube_gdf[cube_gdf['Date'].isin(available_dates)]
+        
+        # Calculate median values
+        median_values = temporal_neighbors.groupby('County_id')[column_selected].median()
+        #print('w.id_order', w.id_order)
+        #print('median_values_aligned', median_values_aligned)
 
         # Calculate median value for smoothing
-        median_value = temporal_neighbors[column_selected].median()
+        #print('median_values', median_values)
+        #median_values = temporal_neighbors[column_selected].median()
+        #print('starting calculate morans i')
+        # Local Moran's I
+        moran_local = esda.Moran_Local(median_values.values, w)
+        # Get the geometry for each county
+        
+       
+        #print('starting second loop')
+        for idx in w.id_order:
+           # print('subset_gdf',subset_gdf)
+           # print('idx, county_id', idx)
+            county_name = subset_gdf.iloc[idx].name  # Use iloc to access values by integer location
+       
+            results.append({
+                'County_id': idx,
+                'County_Name': county_name,
+                'Date': date,
+                'Local_Moran_I': moran_local.Is[idx],
+                'p_value': moran_local.p_sim[idx],
+                'Quadrant': moran_local.q[idx],
+                'P_Value': moran_local.p_sim[idx],
+                'Expected_I':moran_local.EI_sim[idx],
+                'Variance_I': moran_local.VI_sim[idx],
+                'StdDev_I': moran_local.seI_sim[idx],
+        '       Z_Score_I': moran_local.z_sim[idx],
+                # other Moran's I attributes
+            })
 
-        # Local Moran's I with spatial weights and median value
-        moran_local = esda.Moran_Local(median_value, w)
-
-        results.append({
-            'County_id': row['County_id'],
-            'geometry': row['geometry'],
-            'Date': row['Date'],
-            'Local_Moran_I': moran_local.Is[index],
-            'p_value': moran_local.p_sim[index],
-            'Quadrant': moran_local.q,
-            'P_Value': moran_local.p_sim,
-            'Expected_I':moran_local.EI_sim,
-            'Variance_I': moran_local.VI_sim,
-            'StdDev_I': moran_local.seI_sim,
-        '   Z_Score_I': moran_local.z_sim
-        })
-
-    # Convert results to DataFrame
-    space_time_moran= pd.DataFrame(results)
-
+            
+        moran_df =pd.DataFrame(results)   
+        #print('moran_df',moran_df.info())
+        space_time_moran  = st.session_state.gdf.merge(moran_df, left_on='NAME', right_on='County_Name', how='left')
+   
     return space_time_moran
 
+def create_3d_moran_map_old(moran_space_cube, height_column):
+    """
+    Create a 3D map visualization of the Moran's I results with centroid calculation and ESRI-like color scheme.
+
+    Parameters:
+    moran_space_cube (pd.DataFrame): DataFrame containing Moran's I results and geometry.
+    height_column (str): The column name in moran_space_cube that determines the height of each bar.
+
+    Returns:
+    pydeck.Deck: Pydeck map object ready for rendering.
+    """
+    # Convert DataFrame to GeoDataFrame if not already
+    first_date = moran_space_cube['Date'].min()  # Get the earliest date in the dataset
+    print('first_date', first_date)
+    #moran_space_cube['Date'] = pd.to_datetime(moran_space_cube['time_bin'].astype(str).apply(lambda x: x.split('/')[0]))
+      # Filter to include only the specific time bin
+    subset_gdf = moran_space_cube[moran_space_cube['Date'] == first_date]
+    moran_space_cube=subset_gdf
+    if not isinstance(moran_space_cube, gpd.GeoDataFrame):
+        moran_space_cube = gpd.GeoDataFrame(moran_space_cube, geometry='geometry')
+ 
+    # Calculate the centroid from the geometry
+    moran_space_cube['longitude'] = moran_space_cube['geometry'].centroid.x
+    moran_space_cube['latitude'] = moran_space_cube['geometry'].centroid.y
+    print('moran_cube ', moran_space_cube)
+    print('Quadrant', moran_space_cube['Quadrant'])
+    # Apply the moran_quadrant_color function to each row
+    moran_space_cube['color'] = moran_space_cube.apply(moran_quadrant_color, axis=1)
+    # Check the first few rows of the color column
+    print(moran_space_cube['color'].head)
+    # Define the Pydeck layer for 3D bars
+    column_layer = pdk.Layer(
+        "ColumnLayer",
+        data=moran_space_cube,
+        get_position=['longitude', 'latitude'],
+        get_elevation='Quadrant',
+        elevation_scale=10000,  # Adjust scale to fit your data
+        radius=10000,  # The radius of each column in meters
+        get_fill_color='color',  # Use the color column from your DataFrame
+        pickable=True,
+        auto_highlight=True,
+    )
+    
+    # Define the initial view state
+    view_state = pdk.ViewState(
+        latitude=moran_space_cube['latitude'].mean(),
+        longitude=moran_space_cube['longitude'].mean(),
+        zoom=5,
+        pitch=20,
+    )
+    
+    # Create the deck
+    deck = pdk.Deck(layers=[column_layer], initial_view_state=view_state, map_style='mapbox://styles/mapbox/light-v9')
+    
+    return deck
+
+def create_3d_moran_map(moran_space_cube, height):
+    """
+    Create a 3D map visualization of the Moran's I results with centroid calculation and ESRI-like color scheme.
+
+    Parameters:
+    moran_space_cube (pd.DataFrame): DataFrame containing Moran's I results and geometry.
+    height_column (str): The column name in moran_space_cube that determines the height of each bar.
+
+    Returns:
+    pydeck.Deck: Pydeck map object ready for rendering.
+    """
+    if not isinstance(moran_space_cube, gpd.GeoDataFrame):
+         moran_space_cube = gpd.GeoDataFrame(moran_space_cube, geometry='geometry')
+ 
+    moran_space_cube['time_bin'] = pd.to_datetime(moran_space_cube['Date'].astype(str).apply(lambda x: x.split('/')[0]))
+ 
+    # Convert DataFrame to GeoDataFrame if not already
+    unique_time_steps = moran_space_cube['time_bin'].unique()
+
+
+    # Calculate the centroid from the geometry
+    moran_space_cube['longitude'] = moran_space_cube['geometry'].centroid.x
+    moran_space_cube['latitude'] = moran_space_cube['geometry'].centroid.y
+    print('moran_cube ', moran_space_cube.head(20))
+    print('Quadrant', moran_space_cube['Quadrant'])
+    # Apply the moran_quadrant_color function to each row
+    moran_space_cube['color'] = moran_space_cube.apply(moran_quadrant_color, axis=1)
+    # Check the first few rows of the color column
+    print(moran_space_cube['color'].head)
+    # Define the Pydeck layer for 3D bars
+    layers = []
+    for time_step in unique_time_steps:
+            # Filter data for the current time step
+        step_data = moran_space_cube[moran_space_cube['Date'] == time_step]
+
+            # Create a layer for this time step
+        layer = pdk.Layer(
+                'ColumnLayer',
+                data=step_data,
+                get_position='[longitude, latitude]',
+                get_elevation=height,
+                elevation_scale=1,
+                radius=8000,  # Adjust as needed
+                get_fill_color='color',
+                pickable=True,
+                auto_highlight=True,
+                pitch=20
+            )
+        layers.append(layer)
+
+    
+    # Define the initial view state
+    view_state = pdk.ViewState(
+        latitude=moran_space_cube['latitude'].mean(),
+        longitude=moran_space_cube['longitude'].mean(),
+        zoom=7,
+        pitch=20,
+    )
+    
+    # Create the deck
+    deck = pdk.Deck(layers=layers, initial_view_state=view_state, map_style='mapbox://styles/mapbox/light-v9')
+    
+    return deck
 
 st.set_page_config(page_title="Cluster Detection", page_icon="📹")
 st.markdown("# Cluster Detection")
@@ -993,6 +1052,35 @@ legend_html = f"""
 # Use the markdown function to render HTML
 st.markdown(legend_html, unsafe_allow_html=True)
 
+# Assuming moran_space_cube has a 'Date' column of datetime type
+min_date = moran_space_cube['Date'].min()
+print('min_date', min_date)
+max_date = moran_space_cube['Date'].max()
+
+# Assuming moran_space_cube['Date'] is a datetime64 dtype
+unique_dates_list = moran_space_cube['Date'].dt.date.unique()
+unique_dates_list.sort()
+
+# Create the slider to select a range of dates from unique_dates_list
+date_range = st.select_slider(
+    'Select a date range',
+    options=unique_dates_list,
+    value=(unique_dates_list[0], unique_dates_list[20])  # Set default range from first to last date
+)
+
+# Filter the DataFrame based on the selected date range
+selected_layers = moran_space_cube[
+    (moran_space_cube['Date'] >= pd.to_datetime(date_range[0])) &
+    (moran_space_cube['Date'] <= pd.to_datetime(date_range[1]))
+]
+print('selected_layers', selected_layers)
+# Filter layers based on the selected time step
+#selected_layers = [layer for layer in layers if layer.data['time_step'].iloc[0] == date_range]
+
+# Now you can call your function to create the Pydeck map with this filtered_data
+deck = create_3d_moran_map(selected_layers, 'Local_Moran_I')
+# To render the deck in a Streamlit app
+st.pydeck_chart(deck)
 #st.plotly_chart(scatter)
 #st.pyplot(scatter)
 
@@ -1017,6 +1105,7 @@ if st.sidebar.button('Perform comparative analysis'):
 #cluster_plot= st.session_state.cluster_plot
 #st.pyplot(cluster_plot)
 print('cube', cube)
+print('moran_space_cube', moran_space_cube['geometry'])
 print('done')
 #st.pydeck_chart(map)
 
